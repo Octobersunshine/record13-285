@@ -67,9 +67,10 @@ class DataDedupService:
         keep: str = 'first',
         ignore_index: bool = True,
         nan_as_same: bool = False,
+        return_stats: bool = False,
         output_path: Optional[str] = None,
         **kwargs
-    ) -> pd.DataFrame:
+    ) -> Union[pd.DataFrame, tuple]:
         df = self._read_data(source, **kwargs)
 
         original_count = len(df)
@@ -88,12 +89,19 @@ class DataDedupService:
 
         dedup_count = len(dedup_df)
         removed_count = original_count - dedup_count
+        duplicate_rate = (removed_count / original_count * 100) if original_count > 0 else 0
+        unique_rate = (dedup_count / original_count * 100) if original_count > 0 else 100
 
         self.stats = {
             'original_count': original_count,
             'dedup_count': dedup_count,
+            'unique_count': dedup_count,
             'removed_count': removed_count,
-            'duplicate_rate': (removed_count / original_count * 100) if original_count > 0 else 0,
+            'duplicate_count': removed_count,
+            'duplicate_rate': duplicate_rate,
+            'duplicate_rate_pct': duplicate_rate,
+            'unique_rate': unique_rate,
+            'unique_rate_pct': unique_rate,
             'subset': subset if subset else 'all_columns',
             'keep_strategy': keep,
             'nan_as_same': nan_as_same
@@ -103,6 +111,8 @@ class DataDedupService:
             self._write_data(dedup_df, output_path, **kwargs)
             self.stats['output_path'] = output_path
 
+        if return_stats:
+            return dedup_df, self.stats
         return dedup_df
 
     def get_stats(self) -> Dict[str, Any]:
@@ -117,9 +127,11 @@ class DataDedupService:
         print("数据去重统计报告")
         print("=" * 50)
         print(f"原始数据量: {self.stats['original_count']}")
-        print(f"去重后数据量: {self.stats['dedup_count']}")
-        print(f"移除重复数据: {self.stats['removed_count']}")
-        print(f"重复率: {self.stats['duplicate_rate']:.2f}%")
+        print(f"去重后数据量: {self.stats['dedup_count']} (唯一率: {self.stats['unique_rate']:.2f}%)")
+        print(f"─" * 50)
+        print(f"重复记录数量: {self.stats['duplicate_count']}")
+        print(f"重复记录占比: {self.stats['duplicate_rate']:.2f}%")
+        print(f"─" * 50)
         print(f"去重依据列: {self.stats['subset']}")
         print(f"保留策略: {self.stats['keep_strategy']}")
         if 'output_path' in self.stats:
@@ -132,9 +144,11 @@ class DataDedupService:
         subset: Optional[List[str]] = None,
         keep: str = 'first',
         nan_as_same: bool = False,
+        return_stats: bool = False,
         **kwargs
-    ) -> pd.DataFrame:
+    ) -> Union[pd.DataFrame, tuple]:
         df = self._read_data(source, **kwargs)
+        original_count = len(df)
 
         if not nan_as_same:
             df = self._make_nan_unique(df, subset=subset)
@@ -145,6 +159,19 @@ class DataDedupService:
         if not nan_as_same:
             result = self._restore_nan(result, subset=subset)
 
+        dup_count = len(result)
+        stats = {
+            'original_count': original_count,
+            'duplicate_count': dup_count,
+            'duplicate_rate': (dup_count / original_count * 100) if original_count > 0 else 0,
+            'subset': subset if subset else 'all_columns',
+            'keep_strategy': keep,
+            'nan_as_same': nan_as_same
+        }
+        self.stats = stats
+
+        if return_stats:
+            return result, stats
         return result
 
     def get_duplicate_groups(
@@ -152,9 +179,11 @@ class DataDedupService:
         source: Union[pd.DataFrame, str],
         subset: Optional[List[str]] = None,
         nan_as_same: bool = False,
+        return_stats: bool = False,
         **kwargs
-    ) -> pd.DataFrame:
+    ) -> Union[pd.DataFrame, tuple]:
         df = self._read_data(source, **kwargs)
+        original_count = len(df)
         group_cols = subset if subset else list(df.columns)
 
         if not nan_as_same:
@@ -163,11 +192,26 @@ class DataDedupService:
         dup_mask = df.duplicated(subset=subset, keep=False)
         dup_df = df[dup_mask].copy()
 
+        group_count = 0
         if not dup_df.empty:
             dup_df = dup_df.sort_values(by=group_cols)
             dup_df['duplicate_group'] = dup_df.groupby(group_cols).ngroup()
+            group_count = dup_df['duplicate_group'].nunique()
 
         if not nan_as_same:
             dup_df = self._restore_nan(dup_df, subset=subset)
 
+        dup_row_count = len(dup_df)
+        stats = {
+            'original_count': original_count,
+            'duplicate_row_count': dup_row_count,
+            'duplicate_group_count': group_count,
+            'duplicate_rate': (dup_row_count / original_count * 100) if original_count > 0 else 0,
+            'subset': subset if subset else 'all_columns',
+            'nan_as_same': nan_as_same
+        }
+        self.stats = stats
+
+        if return_stats:
+            return dup_df, stats
         return dup_df
